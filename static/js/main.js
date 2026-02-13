@@ -36,6 +36,10 @@ let cachedProcesses = [];
 let currentAddSheet = '';
 let currentAddLabel = '';
 
+// TM-NO 검색 debounce용
+let tmnoSearchTimer = null;
+let tmnoCache = null;
+
 // ==================== API 호출 함수 ====================
 
 async function apiCall(url, options = {}) {
@@ -60,14 +64,15 @@ async function apiCall(url, options = {}) {
 function startInput() {
   document.getElementById('startScreen').classList.remove('active');
   document.getElementById('inputScreen').classList.add('active');
-  // Step 1은 Part 선택 (데이터 로드 불필요)
   updateProgress();
+  history.pushState({ screen: 'input', step: 1 }, '');
 }
 
 function goToStart() {
   resetState();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('startScreen').classList.add('active');
+  history.pushState({ screen: 'start' }, '');
 }
 
 function resetState() {
@@ -78,6 +83,7 @@ function resetState() {
   state.machine = '';
   state.person = '';
   scrapEntries = [];
+  tmnoCache = null;
 
   document.querySelectorAll('.step-container').forEach(c => c.classList.remove('active'));
   document.getElementById('step1').classList.add('active');
@@ -104,10 +110,40 @@ function goToStep(step) {
   document.querySelectorAll('.step-container').forEach(c => c.classList.remove('active'));
   document.getElementById('step' + step).classList.add('active');
   updateProgress();
+  history.pushState({ screen: 'input', step: step }, '');
+
+  // Step 6 진입 시 선택 요약 표시
+  if (step === 6) {
+    updateSelectionSummary();
+  }
 }
 
 function prevStep(current) {
   goToStep(current - 1);
+}
+
+// ==================== 선택 요약 (Step 6) ====================
+
+function updateSelectionSummary() {
+  const el = document.getElementById('selectionSummary');
+  if (!el) return;
+  el.innerHTML = `
+    <span class="summary-item"><b>Part:</b> ${escapeHtml(state.part)}</span>
+    <span class="summary-item"><b>부서:</b> ${escapeHtml(state.department)}</span>
+    <span class="summary-item"><b>공정:</b> ${escapeHtml(state.process)}</span>
+    <span class="summary-item"><b>설비:</b> ${escapeHtml(state.machine || '없음')}</span>
+    <span class="summary-item"><b>폐기자:</b> ${escapeHtml(state.person)}</span>
+  `;
+}
+
+// ==================== 버튼 생성 유틸리티 ====================
+
+function createSelectButton(text, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-select';
+  btn.textContent = text;
+  btn.addEventListener('click', onClick);
+  return btn;
 }
 
 // ==================== 데이터 로드 ====================
@@ -121,7 +157,7 @@ async function loadDepartments() {
     const container = document.getElementById('departmentList');
     container.innerHTML = '';
     data.forEach(dept => {
-      container.innerHTML += `<button class="btn btn-select" onclick="selectDepartment('${escapeHtml(dept)}')">${escapeHtml(dept)}</button>`;
+      container.appendChild(createSelectButton(dept, () => selectDepartment(dept)));
     });
   }
 }
@@ -135,7 +171,7 @@ async function loadProcesses() {
     const container = document.getElementById('processList');
     container.innerHTML = '';
     data.forEach(proc => {
-      container.innerHTML += `<button class="btn btn-select" onclick="selectProcess('${escapeHtml(proc)}')">${escapeHtml(proc)}</button>`;
+      container.appendChild(createSelectButton(proc, () => selectProcess(proc)));
     });
   }
 }
@@ -149,7 +185,7 @@ async function loadMachines() {
     const container = document.getElementById('machineList');
     container.innerHTML = '';
     data.forEach(machine => {
-      container.innerHTML += `<button class="btn btn-select" onclick="selectMachine('${escapeHtml(machine)}')">${escapeHtml(machine)}</button>`;
+      container.appendChild(createSelectButton(machine, () => selectMachine(machine)));
     });
   }
 }
@@ -163,7 +199,7 @@ async function loadPersons() {
     const container = document.getElementById('personList');
     container.innerHTML = '';
     data.forEach(person => {
-      container.innerHTML += `<button class="btn btn-select" onclick="selectPerson('${escapeHtml(person)}')">${escapeHtml(person)}</button>`;
+      container.appendChild(createSelectButton(person, () => selectPerson(person)));
     });
   }
 }
@@ -172,6 +208,7 @@ async function loadPersons() {
 
 function selectPart(part) {
   state.part = part;
+  tmnoCache = null;
   loadDepartments();
   goToStep(2);
 }
@@ -184,6 +221,7 @@ function selectDepartment(dept) {
 
 function selectProcess(proc) {
   state.process = proc;
+  tmnoCache = null;
   loadMachines();
   goToStep(4);
 }
@@ -206,15 +244,19 @@ function selectPerson(person) {
   clearNewEntryForm();
 }
 
-// ==================== TM-NO 검색 ====================
+// ==================== TM-NO 검색 (debounce 적용) ====================
 
-async function searchNewTMNO() {
+function searchNewTMNO() {
+  clearTimeout(tmnoSearchTimer);
+  tmnoSearchTimer = setTimeout(doSearchTMNO, 300);
+}
+
+async function doSearchTMNO() {
   const keyword = document.getElementById('newTmnoSearch').value.trim();
   const dropdown = document.getElementById('tmnoDropdown');
 
   if (keyword.length < 1) {
     dropdown.classList.remove('active');
-    // TM-NO 검색창 비워지면 TM-NO 초기화 및 수량 비활성화
     document.getElementById('newTmno').value = '';
     document.getElementById('newProductName').value = '';
     document.getElementById('newUnitWeight').value = '';
@@ -222,17 +264,24 @@ async function searchNewTMNO() {
     return;
   }
 
-  const data = await apiCall(`/api/tmnos?part=${encodeURIComponent(state.part)}&process=${encodeURIComponent(state.process)}`);
+  // TM-NO 목록 캐시 (Part+공정 조합당 1회만 서버 호출)
+  if (!tmnoCache) {
+    tmnoCache = await apiCall(`/api/tmnos?part=${encodeURIComponent(state.part)}&process=${encodeURIComponent(state.process)}`);
+  }
 
-  if (data) {
-    const filtered = data.filter(tmno =>
+  if (tmnoCache) {
+    const filtered = tmnoCache.filter(tmno =>
       String(tmno).toUpperCase().includes(keyword.toUpperCase())
     ).slice(0, 10);
 
     if (filtered.length > 0) {
       dropdown.innerHTML = '';
       filtered.forEach(tmno => {
-        dropdown.innerHTML += `<div class="tmno-dropdown-item" onclick="selectNewTMNO('${escapeHtml(tmno)}')">${escapeHtml(tmno)}</div>`;
+        const item = document.createElement('div');
+        item.className = 'tmno-dropdown-item';
+        item.textContent = tmno;
+        item.addEventListener('click', () => selectNewTMNO(tmno));
+        dropdown.appendChild(item);
       });
       dropdown.classList.add('active');
     } else {
@@ -246,13 +295,11 @@ async function selectNewTMNO(tmno) {
   document.getElementById('newTmno').value = tmno;
   document.getElementById('tmnoDropdown').classList.remove('active');
 
-  // TM-NO 정보 가져오기
   const info = await apiCall(`/api/tmno_info?part=${encodeURIComponent(state.part)}&tmno=${encodeURIComponent(tmno)}`);
 
   if (info) {
     document.getElementById('newProductName').value = info.productName || '';
     document.getElementById('newUnitWeight').value = info.unitWeight || 0;
-    // TM-NO 선택 시 수량 입력 활성화
     enableQuantityInput(true);
   }
 }
@@ -286,7 +333,7 @@ async function showReasonSelector() {
     const container = document.getElementById('reasonList');
     container.innerHTML = '';
     data.forEach(reason => {
-      container.innerHTML += `<button class="btn btn-select" onclick="selectReason('${escapeHtml(reason)}')">${escapeHtml(reason)}</button>`;
+      container.appendChild(createSelectButton(reason, () => selectReason(reason)));
     });
     document.getElementById('reasonModal').classList.add('active');
   }
@@ -300,7 +347,7 @@ function selectReason(reason) {
 
   // 기타 사유인 경우 비고 입력창 표시
   const remarkContainer = document.getElementById('remarkContainer');
-  if (reason === '기타_T/O품' || reason === '기타_불량품') {
+  if (reason.startsWith('기타')) {
     remarkContainer.style.display = 'block';
     document.getElementById('newRemark').value = '';
   } else {
@@ -327,7 +374,15 @@ function showNumpad(target) {
 
 function numpadInput(val) {
   const display = document.getElementById('numpadDisplay');
-  display.value += val;
+  const current = display.value;
+
+  // 소수점 중복 방지
+  if (val === '.' && current.includes('.')) return;
+
+  // 수량 입력은 정수만 허용
+  if (state.currentNumpadTarget === 'newQuantity' && val === '.') return;
+
+  display.value = current + val;
 }
 
 function numpadDelete() {
@@ -342,6 +397,12 @@ function numpadClear() {
 function numpadConfirm() {
   const value = document.getElementById('numpadDisplay').value;
   const target = state.currentNumpadTarget;
+
+  // 유효한 숫자인지 검증
+  if (value && isNaN(parseFloat(value))) {
+    showToast('올바른 숫자를 입력해주세요.', 'error');
+    return;
+  }
 
   document.getElementById(target).value = value;
 
@@ -376,7 +437,7 @@ function addEntryToTable() {
     return;
   }
   // 기타 사유인 경우 비고 필수
-  if ((reason === '기타_T/O품' || reason === '기타_불량품') && !remark) {
+  if (reason.startsWith('기타') && !remark) {
     showToast('기타 사유를 입력해주세요.', 'error');
     return;
   }
@@ -413,18 +474,22 @@ function updateEntriesTable() {
   tbody.innerHTML = '';
 
   scrapEntries.forEach((entry, idx) => {
-    const remarkDisplay = entry.remark ? escapeHtml(entry.remark) : '-';
-    tbody.innerHTML += `
-      <tr>
-        <td>${escapeHtml(entry.reason)}</td>
-        <td>${remarkDisplay}</td>
-        <td>${escapeHtml(entry.tmno)}</td>
-        <td>${escapeHtml(entry.productName)}</td>
-        <td>${entry.quantity}</td>
-        <td>${entry.weight}</td>
-        <td><button class="btn-row-delete" onclick="deleteEntry(${idx})">삭제</button></td>
-      </tr>
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(entry.reason)}</td>
+      <td>${entry.remark ? escapeHtml(entry.remark) : '-'}</td>
+      <td>${escapeHtml(entry.tmno)}</td>
+      <td>${escapeHtml(entry.productName)}</td>
+      <td>${entry.quantity}</td>
+      <td>${entry.weight}</td>
+      <td></td>
     `;
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-row-delete';
+    delBtn.textContent = '삭제';
+    delBtn.addEventListener('click', () => deleteEntry(idx));
+    tr.lastElementChild.appendChild(delBtn);
+    tbody.appendChild(tr);
   });
 
   document.getElementById('entriesCount').textContent = scrapEntries.length;
@@ -447,17 +512,29 @@ function clearNewEntryForm() {
   document.getElementById('newQuantity').value = '';
   document.getElementById('newWeight').value = '';
   document.getElementById('newUnitWeight').value = '';
-  // TM-NO 없으면 수량 비활성화
   enableQuantityInput(false);
 }
 
-// ==================== 저장 ====================
+// ==================== 저장 (확인 팝업 포함) ====================
 
-async function saveAllData() {
+function confirmSave() {
   if (scrapEntries.length === 0) {
     showToast('저장할 항목이 없습니다.', 'error');
     return;
   }
+
+  // 확인 모달 표시
+  const summary = document.getElementById('confirmSummary');
+  summary.innerHTML = `
+    <p><b>${escapeHtml(state.part)}</b> / <b>${escapeHtml(state.department)}</b> / <b>${escapeHtml(state.process)}</b></p>
+    <p>폐기자: <b>${escapeHtml(state.person)}</b></p>
+    <p>총 <b>${scrapEntries.length}</b>건을 저장합니다.</p>
+  `;
+  document.getElementById('confirmModal').classList.add('active');
+}
+
+async function saveAllData() {
+  closeModal('confirmModal');
 
   showLoading();
   let successCount = 0;
@@ -517,13 +594,11 @@ async function showAddModal(sheetName, label) {
   if (sheetName === 'Depart' || sheetName === 'scrap_name') {
     buildAddForm(sheetName, [], []);
   } else if (sheetName === 'Process') {
-    // Process: Part 선택만 필요 (드롭다운은 하드코딩)
     buildAddForm(sheetName, [], []);
   } else if (sheetName === 'machine') {
     cachedProcesses = await apiCall('/api/process_list') || [];
     buildAddForm(sheetName, [], cachedProcesses);
   } else if (sheetName === 'person') {
-    // person: Part, 공정, 부서 드롭다운 필요
     cachedDepartments = await apiCall('/api/simple_list/Depart') || [];
     cachedProcesses = await apiCall('/api/process_list') || [];
     buildAddForm(sheetName, cachedDepartments, cachedProcesses);
@@ -538,7 +613,6 @@ function buildAddForm(sheetName, departments, processes) {
   if (sheetName === 'Depart') {
     fieldsContainer.innerHTML = '<input type="text" class="modal-input" id="addField1" placeholder="부서명">';
   } else if (sheetName === 'Process') {
-    // Process: Part + 공정
     fieldsContainer.innerHTML = `
       <select class="modal-input" id="addField1">
         <option value="">Part 선택</option>
@@ -562,7 +636,6 @@ function buildAddForm(sheetName, departments, processes) {
       <input type="text" class="modal-input" id="addField3" placeholder="설비명">
     `;
   } else if (sheetName === 'person') {
-    // person: Part + 공정 + 부서 + 폐기자
     let deptOptions = '<option value="">부서 선택</option>';
     departments.forEach(d => {
       deptOptions += `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`;
@@ -586,6 +659,11 @@ function buildAddForm(sheetName, departments, processes) {
       <input type="text" class="modal-input" id="addField1" placeholder="TM-NO">
       <input type="text" class="modal-input" id="addField2" placeholder="품명">
       <input type="number" step="0.001" class="modal-input" id="addField3" placeholder="단위중량">
+      <div class="tmno-process-checks">
+        <label class="check-label"><input type="checkbox" id="addFieldForming" checked> 성형</label>
+        <label class="check-label"><input type="checkbox" id="addFieldSintering" checked> 소결</label>
+        <label class="check-label"><input type="checkbox" id="addFieldPostProc" checked> 후처리</label>
+      </div>
     `;
   } else if (sheetName === 'scrap_name') {
     fieldsContainer.innerHTML = '<input type="text" class="modal-input" id="addField1" placeholder="폐기사유">';
@@ -620,7 +698,6 @@ async function addData() {
     }
     data = [val1, val2, val3];
   } else if (currentAddSheet === 'person') {
-    // person: Part, 공정, 부서, 폐기자명
     const val1 = document.getElementById('addField1').value;
     const val2 = document.getElementById('addField2').value;
     const val3 = document.getElementById('addField3').value;
@@ -638,7 +715,10 @@ async function addData() {
       showToast('TM-NO와 품명을 입력해주세요.', 'error');
       return;
     }
-    data = [val1, val2, parseFloat(val3) || 0];
+    const forming = document.getElementById('addFieldForming').checked ? 'y' : '';
+    const sintering = document.getElementById('addFieldSintering').checked ? 'y' : '';
+    const postProc = document.getElementById('addFieldPostProc').checked ? 'y' : '';
+    data = [val1, val2, parseFloat(val3) || 0, forming, sintering, postProc];
   }
 
   showLoading();
@@ -651,6 +731,7 @@ async function addData() {
   closeModal('addModal');
   if (result && result.success) {
     showToast(result.message, 'success');
+    tmnoCache = null;
     refreshCurrentStepData();
   } else {
     showToast(result?.message || '추가 실패', 'error');
@@ -689,6 +770,7 @@ async function adminLogin() {
     closeModal('adminLoginModal');
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById('adminScreen').classList.add('active');
+    history.pushState({ screen: 'admin' }, '');
   } else {
     showToast('비밀번호가 올바르지 않습니다.', 'error');
   }
@@ -715,27 +797,54 @@ function displayMasterDataTable(headers, rows) {
   currentTableHeaders = headers;
   currentTableRows = rows;
 
-  let html = '<table class="data-table"><thead><tr>';
+  const table = document.createElement('table');
+  table.className = 'data-table';
 
+  // 헤더
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
   headers.forEach(header => {
-    html += '<th>' + escapeHtml(header) + '</th>';
+    const th = document.createElement('th');
+    th.textContent = header;
+    headerRow.appendChild(th);
   });
-  html += '<th>관리</th></tr></thead><tbody>';
+  const thAction = document.createElement('th');
+  thAction.textContent = '관리';
+  headerRow.appendChild(thAction);
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
 
+  // 바디
+  const tbody = document.createElement('tbody');
   rows.forEach((row, idx) => {
-    html += '<tr>';
+    const tr = document.createElement('tr');
     row.data.forEach(cell => {
-      html += '<td>' + (cell ? escapeHtml(String(cell)) : '-') + '</td>';
+      const td = document.createElement('td');
+      td.textContent = cell != null ? String(cell) : '-';
+      tr.appendChild(td);
     });
-    html += '<td>';
-    html += `<button class="btn btn-edit" onclick="editMasterData(${idx}, ${row.rowIndex})">수정</button>`;
-    html += `<button class="btn btn-delete" onclick="deleteMasterData(${row.rowIndex})">삭제</button>`;
-    html += '</td></tr>';
+    const tdAction = document.createElement('td');
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-edit';
+    editBtn.textContent = '수정';
+    editBtn.addEventListener('click', () => editMasterData(idx, row.rowIndex));
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-delete';
+    delBtn.textContent = '삭제';
+    delBtn.addEventListener('click', () => deleteMasterData(row.rowIndex));
+
+    tdAction.appendChild(editBtn);
+    tdAction.appendChild(delBtn);
+    tr.appendChild(tdAction);
+    tbody.appendChild(tr);
   });
+  table.appendChild(tbody);
 
-  html += '</tbody></table>';
-
-  document.getElementById('adminContent').innerHTML = html;
+  const container = document.getElementById('adminContent');
+  container.innerHTML = '';
+  container.appendChild(table);
 }
 
 function editMasterData(dataIndex, rowIndex) {
@@ -747,16 +856,29 @@ function editMasterData(dataIndex, rowIndex) {
     return;
   }
 
-  let fieldsHtml = '';
+  const fieldsContainer = document.getElementById('editModalFields');
+  fieldsContainer.innerHTML = '';
+
   headers.forEach((header, index) => {
     const value = row.data[index] || '';
-    fieldsHtml += '<div style="margin-bottom:15px;">';
-    fieldsHtml += `<label style="display:block; margin-bottom:5px; color:#aaa; font-size:14px;">${escapeHtml(header)}</label>`;
-    fieldsHtml += `<input type="text" class="modal-input edit-field" data-index="${index}" value="${escapeHtml(String(value))}">`;
-    fieldsHtml += '</div>';
+    const div = document.createElement('div');
+    div.style.marginBottom = '15px';
+
+    const label = document.createElement('label');
+    label.style.cssText = 'display:block; margin-bottom:5px; color:#aaa; font-size:14px;';
+    label.textContent = header;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'modal-input edit-field';
+    input.dataset.index = index;
+    input.value = String(value);
+
+    div.appendChild(label);
+    div.appendChild(input);
+    fieldsContainer.appendChild(div);
   });
 
-  document.getElementById('editModalFields').innerHTML = fieldsHtml;
   document.getElementById('editRowIndex').value = rowIndex;
   document.getElementById('editModal').classList.add('active');
 }
@@ -790,10 +912,25 @@ async function saveEditData() {
 }
 
 async function deleteMasterData(rowIndex) {
-  if (!confirm('정말 삭제하시겠습니까?')) {
-    return;
-  }
+  // 커스텀 확인 모달 사용
+  showDeleteConfirm(() => doDeleteMasterData(rowIndex));
+}
 
+function showDeleteConfirm(onConfirm) {
+  const modal = document.getElementById('deleteConfirmModal');
+  modal.classList.add('active');
+
+  const confirmBtn = document.getElementById('deleteConfirmBtn');
+  const newBtn = confirmBtn.cloneNode(true);
+  confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
+  newBtn.id = 'deleteConfirmBtn';
+  newBtn.addEventListener('click', () => {
+    closeModal('deleteConfirmModal');
+    onConfirm();
+  });
+}
+
+async function doDeleteMasterData(rowIndex) {
   showLoading();
   const result = await apiCall(`/api/master_data/${currentMasterSheet}/${rowIndex}`, {
     method: 'DELETE',
@@ -856,8 +993,29 @@ function showToast(message, type = 'info') {
   }, 3000);
 }
 
+// ==================== 브라우저 뒤로가기 처리 ====================
+
+window.addEventListener('popstate', function(e) {
+  const s = e.state;
+  if (!s || s.screen === 'start') {
+    resetState();
+    document.querySelectorAll('.screen').forEach(sc => sc.classList.remove('active'));
+    document.getElementById('startScreen').classList.add('active');
+  } else if (s.screen === 'input') {
+    document.querySelectorAll('.screen').forEach(sc => sc.classList.remove('active'));
+    document.getElementById('inputScreen').classList.add('active');
+    if (s.step && s.step > 1) {
+      goToStep(s.step - 1);
+    }
+  } else if (s.screen === 'admin') {
+    document.querySelectorAll('.screen').forEach(sc => sc.classList.remove('active'));
+    document.getElementById('startScreen').classList.add('active');
+  }
+});
+
 // ==================== 초기화 ====================
 
 document.addEventListener('DOMContentLoaded', function() {
+  history.replaceState({ screen: 'start' }, '');
   console.log('폐기불량 관리시스템 초기화 완료');
 });

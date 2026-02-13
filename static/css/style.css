@@ -290,6 +290,14 @@ body {
   border-bottom: 2px solid #333;
 }
 
+.step-desc {
+  display: block;
+  font-size: 15px;
+  font-weight: 400;
+  color: #999;
+  margin-top: 6px;
+}
+
 /* 버튼 그리드 */
 .button-grid {
   display: grid;

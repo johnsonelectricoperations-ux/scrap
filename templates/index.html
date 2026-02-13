@@ -42,7 +42,7 @@
 
       <!-- Step 1: Part 선택 -->
       <div id="step1" class="step-container active">
-        <h3>Part 선택</h3>
+        <h3>Part 선택 <span class="step-desc">폐기품이 생산1 / 생산2 중 어느 소속 제품인지 선택하세요</span></h3>
         <div class="button-grid">
           <button class="btn btn-select" onclick="selectPart('1Part')">1Part</button>
           <button class="btn btn-select" onclick="selectPart('2Part')">2Part</button>
@@ -51,7 +51,7 @@
 
       <!-- Step 2: 부서 선택 -->
       <div id="step2" class="step-container">
-        <h3>부서 선택</h3>
+        <h3>부서 선택 <span class="step-desc">폐기하는 사람의 소속팀을 선택하세요</span></h3>
         <div id="departmentList" class="button-grid"></div>
         <button class="btn btn-add-small" onclick="showAddModal('Depart', '부서')">+ 부서 추가</button>
         <button class="btn btn-prev" onclick="prevStep(2)">이전</button>
@@ -59,7 +59,7 @@
 
       <!-- Step 3: 공정 선택 -->
       <div id="step3" class="step-container">
-        <h3>공정 선택</h3>
+        <h3>공정 선택 <span class="step-desc">폐기품이 발생한 공정을 선택하세요</span></h3>
         <div id="processList" class="button-grid"></div>
         <button class="btn btn-add-small" onclick="showAddModal('Process', '공정')">+ 공정 추가</button>
         <button class="btn btn-prev" onclick="prevStep(3)">이전</button>
@@ -67,7 +67,7 @@
 
       <!-- Step 4: 설비명 선택 -->
       <div id="step4" class="step-container">
-        <h3>설비명 선택 <span style="font-size:14px; color:#7f8c8d;">(선택사항)</span></h3>
+        <h3>설비명 선택 <span class="step-desc">폐기품이 발생한 설비를 선택하세요 (선택사항)</span></h3>
         <div id="machineList" class="button-grid"></div>
         <button class="btn btn-add-small" onclick="showAddModal('machine', '설비')">+ 설비 추가</button>
         <div style="margin-top:20px;">
@@ -78,7 +78,7 @@
 
       <!-- Step 5: 폐기자 선택 -->
       <div id="step5" class="step-container">
-        <h3>폐기자 선택</h3>
+        <h3>폐기자 선택 <span class="step-desc">폐기하는 사람의 이름을 선택하세요</span></h3>
         <div id="personList" class="button-grid"></div>
         <button class="btn btn-add-small" onclick="showAddModal('person', '폐기자')">+ 폐기자 추가</button>
         <button class="btn btn-prev" onclick="prevStep(5)">이전</button>
@@ -86,7 +86,7 @@
 
       <!-- Step 6: 폐기 항목 입력 -->
       <div id="step6" class="step-container">
-        <h3>폐기 항목 입력</h3>
+        <h3>폐기 항목 입력 <span class="step-desc">하단의 표에 등록 상태를 확인 후 전체저장을 누르세요</span></h3>
 
         <!-- 선택 정보 요약 -->
         <div class="selection-summary" id="selectionSummary"></div>
